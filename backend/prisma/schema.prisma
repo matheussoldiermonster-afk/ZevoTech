@@ -1,0 +1,549 @@
+// Zevo Tech — Schema do banco de dados
+// Sistema single-tenant de gestão de clientes, empresas, endereços,
+// ordens de serviço, agenda, equipamentos, contratos e financeiro.
+//
+// Hierarquia: Client → Company → Address → Equipment / ServiceOrder / Contract
+//
+// Convenção de datas:
+//  - "Datas civis" (vencimento, referência, data de agenda, início de contrato)
+//    são gravadas como 00:00 UTC do dia (ex.: 2026-09-10T00:00:00Z) e SEMPRE
+//    devem ser formatadas/comparadas em UTC.
+//  - "Instantes" (createdAt, paidAt, completedAt) são momentos reais e são
+//    convertidos para America/Sao_Paulo na exibição e nos filtros de período.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==============================
+// ENUMS
+// ==============================
+
+enum UserRole {
+  ADMIN
+  FINANCIAL
+}
+
+enum ServiceOrderStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum ServiceOrderType {
+  INSTALLATION
+  CORRECTIVE
+  PREVENTIVE
+  KIT_REMOVAL
+  OTHER
+}
+
+enum ServiceOrderPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  PIX
+  DEBIT_CARD
+  CREDIT_CARD
+  BANK_TRANSFER
+  BOLETO
+}
+
+enum EquipmentStatus {
+  IN_STOCK
+  INSTALLED
+  MAINTENANCE
+  DAMAGED
+  DISCARDED
+}
+
+enum SchedulePeriod {
+  MORNING
+  AFTERNOON
+  EVENING
+}
+
+enum ContractPeriodicity {
+  MONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  ANNUAL
+}
+
+enum ContractStatus {
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+  ENDED
+}
+
+enum EquipmentMovementType {
+  ENTRY
+  INSTALL
+  REMOVE
+  TRANSFER
+  TO_MAINTENANCE
+  FROM_MAINTENANCE
+  DAMAGED
+  DISCARD
+  STATUS_CHANGE
+  EXIT
+}
+
+// Efeito de um equipamento vinculado a uma OS sobre o estoque
+enum ServiceOrderEquipmentAction {
+  CONSUME   // sai do estoque e fica instalado no endereço da OS
+  RETURN    // sai do endereço da OS e volta ao estoque (retirada de kit)
+  REFERENCE // apenas referência (ex.: manutenção de equipamento já instalado)
+}
+
+// ==============================
+// USUÁRIOS
+// ==============================
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         UserRole @default(ADMIN)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  serviceOrderHistory ServiceOrderHistory[]
+  equipmentMovements  EquipmentMovement[]
+
+  @@map("users")
+}
+
+// ==============================
+// CLIENTES
+// ==============================
+// O cliente é a pessoa/grupo responsável. Ele pode ter N empresas.
+// Os campos address/city/state/zipCode são LEGADOS (pré-v3): mantidos para
+// compatibilidade; o endereço oficial agora fica em Address.
+
+model Client {
+  id           String   @id @default(uuid())
+  name         String
+  document     String   @unique
+  documentType String   @default("CNPJ")
+  email        String?
+  phone        String
+  address      String?
+  city         String?
+  state        String?
+  zipCode      String?
+  notes        String?
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  companies     Company[]
+  contracts     Contract[]
+  serviceOrders ServiceOrder[]
+  equipments    Equipment[]
+
+  @@index([name])
+  @@index([createdAt])
+  @@map("clients")
+}
+
+// ==============================
+// EMPRESAS
+// ==============================
+
+model Company {
+  id        String   @id @default(uuid())
+  client    Client   @relation(fields: [clientId], references: [id])
+  clientId  String
+  name      String
+  tradeName String?
+  document  String?  @unique
+  email     String?
+  phone     String?
+  notes     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  addresses     Address[]
+  contracts     Contract[]
+  serviceOrders ServiceOrder[]
+
+  @@index([clientId])
+  @@index([name])
+  @@map("companies")
+}
+
+// ==============================
+// ENDEREÇOS
+// ==============================
+
+model Address {
+  id         String   @id @default(uuid())
+  company    Company  @relation(fields: [companyId], references: [id])
+  companyId  String
+  label      String   @default("Principal")
+  street     String?
+  number     String?
+  complement String?
+  district   String?
+  city       String?
+  state      String?
+  zipCode    String?
+  reference  String?
+  isMain     Boolean  @default(false)
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  equipments    Equipment[]
+  serviceOrders ServiceOrder[]
+  contracts     Contract[]
+  movementsFrom EquipmentMovement[] @relation("MovementFromAddress")
+  movementsTo   EquipmentMovement[] @relation("MovementToAddress")
+
+  @@index([companyId])
+  @@index([city])
+  @@map("addresses")
+}
+
+// ==============================
+// TÉCNICOS (cadastro, sem login)
+// ==============================
+
+model Technician {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String?
+  email     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  serviceOrders ServiceOrder[]
+  schedules     Schedule[]
+
+  @@index([name])
+  @@map("technicians")
+}
+
+// ==============================
+// CONTRATOS
+// ==============================
+// monthlyValue = valor MENSAL equivalente. Uma cobrança de contrato
+// trimestral vale monthlyValue × 3, e assim por diante.
+
+model Contract {
+  id           String              @id @default(uuid())
+  client       Client              @relation(fields: [clientId], references: [id])
+  clientId     String
+  company      Company             @relation(fields: [companyId], references: [id])
+  companyId    String
+  address      Address?            @relation(fields: [addressId], references: [id])
+  addressId    String?
+  monthlyValue Decimal             @db.Decimal(10, 2)
+  periodicity  ContractPeriodicity @default(MONTHLY)
+  status       ContractStatus      @default(ACTIVE)
+  dueDay       Int
+  startDate    DateTime
+  endDate      DateTime?
+  active       Boolean             @default(true)
+  notes        String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  monthlyPayments MonthlyPayment[]
+
+  @@index([clientId])
+  @@index([companyId])
+  @@index([addressId])
+  @@index([active])
+  @@index([status])
+  @@map("contracts")
+}
+
+// ==============================
+// COBRANÇAS DE CONTRATO
+// ==============================
+
+model MonthlyPayment {
+  id         String         @id @default(uuid())
+  contract   Contract       @relation(fields: [contractId], references: [id])
+  contractId String
+  reference  DateTime
+  amount     Decimal        @db.Decimal(10, 2)
+  status     PaymentStatus  @default(PENDING)
+  dueDate    DateTime
+  paidAt     DateTime?
+  method     PaymentMethod?
+  notes      String?
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  @@unique([contractId, reference])
+  @@index([contractId])
+  @@index([status])
+  @@index([reference])
+  @@index([dueDate])
+  @@index([paidAt])
+  @@index([status, dueDate])
+  @@map("monthly_payments")
+}
+
+// ==============================
+// ORDENS DE SERVIÇO
+// ==============================
+
+model ServiceOrder {
+  id          String      @id @default(uuid())
+  orderNumber Int         @unique @default(autoincrement())
+  client      Client      @relation(fields: [clientId], references: [id])
+  clientId    String
+  company     Company     @relation(fields: [companyId], references: [id])
+  companyId   String
+  address     Address     @relation(fields: [addressId], references: [id])
+  addressId   String
+  technician  Technician? @relation(fields: [technicianId], references: [id])
+  technicianId String?
+
+  title       String
+  description String?
+  type        ServiceOrderType
+  priority    ServiceOrderPriority @default(NORMAL)
+  status      ServiceOrderStatus   @default(OPEN)
+
+  totalValue Decimal @default(0) @db.Decimal(10, 2)
+
+  // Cobrança avulsa da OS (independente das cobranças do Contrato)
+  paymentStatus PaymentStatus  @default(PENDING)
+  paymentMethod PaymentMethod?
+  paidAt        DateTime?
+  dueDate       DateTime?
+
+  // LEGADO: a agenda oficial agora é a tabela Schedule.
+  scheduledDate DateTime?
+  period        SchedulePeriod?
+
+  openedAt    DateTime  @default(now())
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items              ServiceOrderItem[]
+  schedules          Schedule[]
+  equipments         ServiceOrderEquipment[]
+  history            ServiceOrderHistory[]
+  equipmentMovements EquipmentMovement[]
+
+  @@index([clientId])
+  @@index([companyId])
+  @@index([addressId])
+  @@index([technicianId])
+  @@index([status])
+  @@index([type])
+  @@index([priority])
+  @@index([dueDate])
+  @@index([paidAt])
+  @@index([createdAt])
+  @@index([scheduledDate])
+  @@index([status, priority])
+  @@index([clientId, createdAt])
+  @@map("service_orders")
+}
+
+// ==============================
+// ITENS DA ORDEM DE SERVIÇO
+// ==============================
+
+model ServiceOrderItem {
+  id             String       @id @default(uuid())
+  serviceOrder   ServiceOrder @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+  serviceOrderId String
+
+  description String
+  quantity    Int     @default(1)
+  unitValue   Decimal @db.Decimal(10, 2)
+
+  @@index([serviceOrderId])
+  @@map("service_order_items")
+}
+
+// ==============================
+// EQUIPAMENTOS DA OS (N:N)
+// ==============================
+
+model ServiceOrderEquipment {
+  serviceOrder   ServiceOrder @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+  serviceOrderId String
+  equipment      Equipment    @relation(fields: [equipmentId], references: [id])
+  equipmentId    String
+  quantity       Int                         @default(1)
+  action         ServiceOrderEquipmentAction @default(REFERENCE)
+  // true quando a movimentação de estoque já foi aplicada (OS concluída)
+  applied        Boolean                     @default(false)
+  createdAt      DateTime     @default(now())
+
+  @@id([serviceOrderId, equipmentId])
+  @@index([equipmentId])
+  @@map("service_order_equipments")
+}
+
+// ==============================
+// HISTÓRICO DA OS
+// ==============================
+
+model ServiceOrderHistory {
+  id             String              @id @default(uuid())
+  serviceOrder   ServiceOrder        @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+  serviceOrderId String
+  user           User?               @relation(fields: [userId], references: [id])
+  userId         String?
+  action         String
+  fromStatus     ServiceOrderStatus?
+  toStatus       ServiceOrderStatus?
+  note           String?
+  createdAt      DateTime            @default(now())
+
+  @@index([serviceOrderId])
+  @@index([createdAt])
+  @@map("service_order_history")
+}
+
+// ==============================
+// AGENDA
+// ==============================
+
+model Schedule {
+  id             String       @id @default(uuid())
+  serviceOrder   ServiceOrder @relation(fields: [serviceOrderId], references: [id], onDelete: Cascade)
+  serviceOrderId String
+  technician     Technician?  @relation(fields: [technicianId], references: [id])
+  technicianId   String?
+
+  date   DateTime
+  time   String?
+  period SchedulePeriod?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([serviceOrderId])
+  @@index([date])
+  @@index([date, technicianId])
+  @@map("schedules")
+}
+
+// ==============================
+// TIPOS DE EQUIPAMENTO
+// ==============================
+
+model EquipmentType {
+  id           String  @id @default(uuid())
+  name         String
+  category     String
+  model        String?
+  minimumStock Int     @default(0)
+  active       Boolean @default(true)
+
+  equipments Equipment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
+  @@index([category])
+  @@map("equipment_types")
+}
+
+// ==============================
+// EQUIPAMENTOS
+// ==============================
+// Controle por QUANTIDADE: cada registro representa N unidades do mesmo tipo
+// no mesmo local e situação (um "lote"). O estoque de cada tipo é um único
+// registro IN_STOCK sem endereço. addressId é o vínculo oficial com o local;
+// clientId é mantido sincronizado a partir do endereço (compatibilidade).
+
+model Equipment {
+  id              String        @id @default(uuid())
+  equipmentType   EquipmentType @relation(fields: [equipmentTypeId], references: [id])
+  equipmentTypeId String
+
+  client   Client?  @relation(fields: [clientId], references: [id])
+  clientId String?
+  address  Address? @relation(fields: [addressId], references: [id])
+  addressId String?
+
+  serialNumber String?         @unique
+  status       EquipmentStatus @default(IN_STOCK)
+  // Unidades deste equipamento neste local/situação (controle por quantidade).
+  // O registro em estoque (IN_STOCK, sem endereço) guarda a quantidade disponível.
+  quantity     Int             @default(1)
+
+  installationDate DateTime?
+  location         String?
+  notes            String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  movements          EquipmentMovement[]
+  serviceOrderLinks  ServiceOrderEquipment[]
+
+  @@index([equipmentTypeId])
+  @@index([clientId])
+  @@index([addressId])
+  @@index([status])
+  @@index([equipmentTypeId, status, addressId])
+  @@map("equipments")
+}
+
+// ==============================
+// MOVIMENTAÇÕES DE EQUIPAMENTO
+// ==============================
+
+model EquipmentMovement {
+  id             String                @id @default(uuid())
+  equipment      Equipment             @relation(fields: [equipmentId], references: [id])
+  equipmentId    String
+  type           EquipmentMovementType
+  quantity       Int                   @default(1)
+  fromStatus     EquipmentStatus?
+  toStatus       EquipmentStatus?
+  fromAddress    Address?              @relation("MovementFromAddress", fields: [fromAddressId], references: [id])
+  fromAddressId  String?
+  toAddress      Address?              @relation("MovementToAddress", fields: [toAddressId], references: [id])
+  toAddressId    String?
+  serviceOrder   ServiceOrder?         @relation(fields: [serviceOrderId], references: [id])
+  serviceOrderId String?
+  user           User?                 @relation(fields: [userId], references: [id])
+  userId         String?
+  notes          String?
+  createdAt      DateTime              @default(now())
+
+  @@index([equipmentId])
+  @@index([createdAt])
+  @@index([type, createdAt])
+  @@map("equipment_movements")
+}

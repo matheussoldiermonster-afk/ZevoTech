@@ -1,0 +1,310 @@
+.zevo-intro {
+  position: fixed;
+  inset: 0;
+
+  z-index: 99999;
+
+  display: grid;
+  place-items: center;
+
+  overflow: hidden;
+
+  background:
+    radial-gradient(
+      circle at center,
+      rgba(31, 180, 177, 0.13),
+      transparent 34%
+    ),
+    #05090b;
+
+  animation:
+    zevo-screen-out
+    850ms
+    cubic-bezier(.7, 0, .2, 1)
+    2.45s
+    forwards;
+}
+
+
+/* LOGO */
+
+.zevo-intro-logo {
+  position: relative;
+
+  z-index: 1;
+
+  width: min(42vw, 420px);
+  max-width: 70vw;
+
+  filter:
+    drop-shadow(
+      0 0 18px
+      rgba(31, 190, 180, .35)
+    );
+
+  animation:
+
+    zevo-logo-in
+    850ms
+    cubic-bezier(.2, .9, .2, 1)
+    both,
+
+    zevo-logo-pulse
+    850ms
+    ease-in-out
+    850ms
+    1,
+
+    zevo-logo-out
+    850ms
+    cubic-bezier(.7, 0, .3, 1)
+    1.65s
+    forwards;
+}
+
+
+/* BRILHO ATRÁS DA LOGO */
+
+.zevo-intro-glow {
+  position: absolute;
+
+  width: 34vmin;
+  height: 34vmin;
+
+  border-radius: 50%;
+
+  background:
+    rgba(70, 220, 200, .18);
+
+  filter: blur(55px);
+
+  animation:
+    zevo-glow
+    2.5s
+    ease-in-out
+    both;
+}
+
+
+/* TEXTO */
+
+.zevo-intro-status {
+  position: absolute;
+
+  top: calc(50% + 220px);
+
+  display: flex;
+
+  gap: 4px;
+
+  align-items: center;
+
+  font:
+    600 11px/1.2
+    Inter,
+    system-ui,
+    sans-serif;
+
+  letter-spacing: .22em;
+
+  color:
+    rgba(225, 255, 250, .7);
+
+  animation:
+    zevo-status
+    2.2s
+    ease
+    both;
+}
+
+
+.zevo-intro-dots {
+  letter-spacing: .12em;
+
+  animation:
+    zevo-dots
+    900ms
+    steps(3, end)
+    infinite;
+}
+
+
+/* ============================= */
+/* ANIMAÇÕES */
+/* ============================= */
+
+@keyframes zevo-logo-in {
+
+  from {
+    opacity: 0;
+
+    transform:
+      scale(.15)
+      rotate(-7deg);
+  }
+
+  65% {
+    opacity: 1;
+
+    transform:
+      scale(1.08)
+      rotate(1deg);
+  }
+
+  to {
+    opacity: 1;
+
+    transform:
+      scale(1)
+      rotate(0);
+  }
+}
+
+
+@keyframes zevo-logo-pulse {
+
+  50% {
+    transform: scale(1.045);
+  }
+
+}
+
+
+@keyframes zevo-logo-out {
+
+  from {
+    opacity: 1;
+
+    transform:
+      scale(1);
+  }
+
+  to {
+    opacity: 0;
+
+    transform:
+      scale(.23);
+  }
+
+}
+
+
+@keyframes zevo-glow {
+
+  0% {
+    opacity: 0;
+
+    transform:
+      scale(.25);
+  }
+
+  35% {
+    opacity: 1;
+
+    transform:
+      scale(1);
+  }
+
+  75% {
+    opacity: .8;
+
+    transform:
+      scale(1.12);
+  }
+
+  100% {
+    opacity: 0;
+
+    transform:
+      scale(1.4);
+  }
+
+}
+
+
+@keyframes zevo-status {
+
+  0%,
+  20% {
+    opacity: 0;
+
+    transform:
+      translateY(8px);
+  }
+
+  35%,
+  75% {
+    opacity: 1;
+
+    transform:
+      translateY(0);
+  }
+
+  100% {
+    opacity: 0;
+
+    transform:
+      translateY(-5px);
+  }
+
+}
+
+
+@keyframes zevo-dots {
+
+  0% {
+    opacity: .2;
+  }
+
+  50% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: .2;
+  }
+
+}
+
+
+@keyframes zevo-screen-out {
+
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+
+    visibility: hidden;
+
+    pointer-events: none;
+  }
+
+}
+
+
+/* ACESSIBILIDADE */
+
+@media (prefers-reduced-motion: reduce) {
+
+  .zevo-intro,
+  .zevo-intro-logo,
+  .zevo-intro-glow,
+  .zevo-intro-status {
+
+    animation: none !important;
+
+  }
+
+  .zevo-intro {
+
+    opacity: 0;
+
+    visibility: hidden;
+
+    pointer-events: none;
+
+  }
+
+}

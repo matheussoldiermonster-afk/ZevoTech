@@ -1,0 +1,14 @@
+# Backend
+backend/node_modules
+backend/.env
+backend/backups
+
+# Frontend
+frontend/node_modules
+frontend/.env
+frontend/dist
+frontend/build
+
+# Geral
+.DS_Store
+*.log
